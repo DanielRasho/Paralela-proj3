@@ -8,7 +8,7 @@ const int degreeInc = 2;
 const int degreeBins = 180 / degreeInc;
 const int rBins = 200;
 const float radInc = degreeInc * M_PI / 180;
-const int THRESHOLD = 200;  // Minimum votes required to consider a line
+const int THRESHOLD = 2100;  // Minimum votes required to consider a line
 
 // ==========================================
 // Simple PGM reader
