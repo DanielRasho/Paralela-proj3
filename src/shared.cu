@@ -6,14 +6,14 @@
 #include <png.h>
 
 const int degreeInc = 2;
-const int degreeBins = 90;  // 90
+const int degreeBins = 90;  // 180/2 = 90
 const int rBins = 136;
 const float radInc = degreeInc * M_PI / 180;
-const int THRESHOLD = 2100;
+const int THRESHOLD = 3000;  
 
 // ==========================================
 // CONSTANT MEMORY 
-__constant__ float d_Cos[90];  // degreeBins = 90
+__constant__ float d_Cos[90];
 __constant__ float d_Sin[90];
 
 //==============================
@@ -166,11 +166,11 @@ __global__ void GPU_HoughTran(unsigned char *pic, int w, int h, int *acc,
   int gloID = blockIdx.x * blockDim.x + threadIdx.x;
 
   // LOCAL accumulator in shared memory
-  __shared__ int localAcc[12240];  
+  __shared__ int localAcc[12240];  // degreeBins * rBins = 90 * 136
   
   // Initialize local accumulator to 0
   // Each thread initializes multiple elements
-  for (int i = locID; i < 12240; i += blockDim.x) {
+  for (int i = locID; i < degreeBins * rBins; i += blockDim.x) {
     localAcc[i] = 0;
   }
   
@@ -191,7 +191,7 @@ __global__ void GPU_HoughTran(unsigned char *pic, int w, int h, int *acc,
     if (pic[gloID] > 0)
     {
       // Vote for all possible lines through this pixel
-      for (int tIdx = 0; tIdx < 90; tIdx++)
+      for (int tIdx = 0; tIdx < degreeBins; tIdx++)  
       {
         // Calculate rho using CONSTANT memory
         float r = xCoord * d_Cos[tIdx] + yCoord * d_Sin[tIdx];
@@ -200,10 +200,10 @@ __global__ void GPU_HoughTran(unsigned char *pic, int w, int h, int *acc,
         int rIdx = (int)((r + rMax) / rScale);
 
         // Bounds check
-        if (rIdx >= 0 && rIdx < 136)
+        if (rIdx >= 0 && rIdx < rBins) 
         {
-          // e) Update LOCAL accumulator (not global) with atomicAdd
-          atomicAdd(&localAcc[rIdx * 90 + tIdx], 1);
+          // Update LOCAL accumulator (not global) with atomicAdd
+          atomicAdd(&localAcc[rIdx * degreeBins + tIdx], 1);
         }
       }
     }
@@ -214,7 +214,7 @@ __global__ void GPU_HoughTran(unsigned char *pic, int w, int h, int *acc,
   
   // Transfer localAcc -> acc (global)
   // Each thread transfers multiple elements
-  for (int i = locID; i < 12240; i += blockDim.x) {
+  for (int i = locID; i < degreeBins * rBins; i += blockDim.x) {
     if (localAcc[i] > 0) {  // Only transfer if there are votes
       atomicAdd(&acc[i], localAcc[i]);
     }
@@ -324,7 +324,6 @@ int main (int argc, char **argv)
   // Record start event
   cudaEventRecord(start);
 
-  // Launch kernel (d_Cos and d_Sin are in constant memory, no need to pass as parameters)
   printf("Launching kernel...\n");
   GPU_HoughTran<<<gridSize, blockSize>>>(d_in, w, h, d_hough, rMax, rScale);
 
@@ -351,6 +350,20 @@ int main (int argc, char **argv)
   // Copy results back to host
   int *h_hough = (int *)malloc(degreeBins * rBins * sizeof(int));
   cudaMemcpy(h_hough, d_hough, sizeof(int) * degreeBins * rBins, cudaMemcpyDeviceToHost);
+
+  printf("==== Accumulator Statistics ====\n");
+  int maxVotes = 0;
+  int totalNonZero = 0;
+  for (int i = 0; i < degreeBins * rBins; i++) {
+      if (h_hough[i] > 0) totalNonZero++;
+      if (h_hough[i] > maxVotes) maxVotes = h_hough[i];
+  }
+  printf("Max votes in any bin: %d\n", maxVotes);
+  printf("Non-zero bins: %d / %d (%.2f%%)\n", 
+         totalNonZero, degreeBins * rBins, 
+         100.0 * totalNonZero / (degreeBins * rBins));
+  printf("Current threshold: %d\n", THRESHOLD);
+  printf("Suggested threshold: %d (70%% of max)\n\n", (int)(maxVotes * 0.7));
 
   printf("==== Detected Lines (threshold = %d votes) ====\n", THRESHOLD);
   int linesFound = 0;
